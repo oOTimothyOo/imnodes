@@ -6,7 +6,7 @@
 
 #include "imnodes.h"
 
-#include <limits.h>
+#include <climits>
 
 // the structure of this file:
 //
