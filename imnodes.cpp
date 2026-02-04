@@ -1346,6 +1346,25 @@ void DrawGrid(ImNodesEditorContext& editor, const ImVec2& canvas_size)
             EditorSpaceToScreenSpace(ImVec2(canvas_size.x, y)),
             offset.y - y == 0.f && draw_primary ? line_color_prim : line_color);
     }
+
+    if (GImNodes->Style.Flags & ImNodesStyleFlags_GridAxes)
+    {
+        const ImU32 axis_color = line_color_prim;
+        const float axis_thickness = 1.5f / editor.ZoomScale;
+        const float axis_x = offset.x;
+        const float axis_y = offset.y;
+
+        GImNodes->CanvasDrawList->AddLine(
+            EditorSpaceToScreenSpace(ImVec2(axis_x, 0.0f)),
+            EditorSpaceToScreenSpace(ImVec2(axis_x, canvas_size.y)),
+            axis_color,
+            axis_thickness);
+        GImNodes->CanvasDrawList->AddLine(
+            EditorSpaceToScreenSpace(ImVec2(0.0f, axis_y)),
+            EditorSpaceToScreenSpace(ImVec2(canvas_size.x, axis_y)),
+            axis_color,
+            axis_thickness);
+    }
 }
 
 inline void AppendDrawData(ImDrawList* src, ImVec2 origin, float scale)
@@ -1773,16 +1792,16 @@ static inline void CalcMiniMapLayout()
     float  mini_map_scaling;
     {
         const ImVec2 max_size =
-            ImFloor(editor_rect.GetSize() * editor.MiniMapSizeFraction - border * 2.0f);
+            editor_rect.GetSize() * editor.MiniMapSizeFraction - border * 2.0f;
         const float  max_size_aspect_ratio = max_size.x / max_size.y;
         const ImVec2 grid_content_size = editor.GridContentBounds.IsInverted()
                                              ? max_size
-                                             : ImFloor(editor.GridContentBounds.GetSize());
+                                             : editor.GridContentBounds.GetSize();
         const float  grid_content_aspect_ratio = grid_content_size.x / grid_content_size.y;
-        mini_map_size = ImFloor(
+        mini_map_size =
             grid_content_aspect_ratio > max_size_aspect_ratio
                 ? ImVec2(max_size.x, max_size.x / grid_content_aspect_ratio)
-                : ImVec2(max_size.y * grid_content_aspect_ratio, max_size.y));
+                : ImVec2(max_size.y * grid_content_aspect_ratio, max_size.y);
         mini_map_scaling = mini_map_size.x / grid_content_size.x;
     }
 
@@ -1814,7 +1833,7 @@ static inline void CalcMiniMapLayout()
 
         const ImVec2 top_left_pos = editor_rect.Min + offset + border;
         const ImVec2 bottom_right_pos = editor_rect.Max - offset - border - mini_map_size;
-        mini_map_pos = ImFloor(ImLerp(top_left_pos, bottom_right_pos, align));
+        mini_map_pos = ImLerp(top_left_pos, bottom_right_pos, align);
     }
 
     editor.MiniMapRectScreenSpace =
@@ -1974,18 +1993,49 @@ static void MiniMapUpdate()
     // Have to pop mini-map clip rect
     GImNodes->CanvasDrawList->PopClipRect();
 
-    bool mini_map_is_hovered = ImGui::IsWindowHovered();
+    const bool mini_map_is_hovered = IsMiniMapHovered();
+    const bool mini_map_clicked =
+        mini_map_is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+    auto clamp_to_minimap = [&](ImVec2 pos) -> ImVec2 {
+        pos.x = ImClamp(
+            pos.x, editor.MiniMapContentScreenSpace.Min.x, editor.MiniMapContentScreenSpace.Max.x);
+        pos.y = ImClamp(
+            pos.y, editor.MiniMapContentScreenSpace.Min.y, editor.MiniMapContentScreenSpace.Max.y);
+        return pos;
+    };
+
+    if (mini_map_clicked)
+    {
+        editor.MiniMapDragging = true;
+        const ImRect view_rect =
+            ScreenSpaceToMiniMapSpace(editor, GImNodes->CanvasRectScreenSpace);
+        if (view_rect.Contains(ImGui::GetMousePos()))
+        {
+            editor.MiniMapDragOffset = ImGui::GetMousePos() - view_rect.GetCenter();
+        }
+        else
+        {
+            editor.MiniMapDragOffset = ImVec2(0.0f, 0.0f);
+        }
+    }
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        editor.MiniMapDragging = false;
+    }
 
     ImGui::EndChild();
 
-    bool center_on_click = mini_map_is_hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-                           editor.ClickInteraction.Type == ImNodesClickInteractionType_None &&
-                           !GImNodes->NodeIdxSubmissionOrder.empty();
-    if (center_on_click)
+    bool center_on_drag = editor.MiniMapDragging &&
+                          editor.ClickInteraction.Type == ImNodesClickInteractionType_None &&
+                          !GImNodes->NodeIdxSubmissionOrder.empty();
+    if (center_on_drag)
     {
-        ImVec2 target = MiniMapSpaceToGridSpace(editor, ImGui::GetMousePos());
-        ImVec2 center = GImNodes->CanvasRectScreenSpace.GetSize() * 0.5f;
-        editor.Panning = ImFloor(center - target);
+        const ImVec2 mouse_pos = clamp_to_minimap(ImGui::GetMousePos() - editor.MiniMapDragOffset);
+        const ImVec2 target = MiniMapSpaceToGridSpace(editor, mouse_pos);
+        const ImVec2 center = GImNodes->CanvasRectScreenSpace.GetSize() * 0.5f;
+        editor.Panning = center - target;
     }
 
     // Reset callback info after use
@@ -2286,16 +2336,20 @@ void BeginNodeEditor()
         GImNodes->OriginalImgCtx = ImGui::GetCurrentContext();
 
         // Copy config settings in IO from main context, avoiding input fields
+        const size_t io_copy_size =
+            offsetof(ImGuiIO, BackendLanguageUserData) +
+            sizeof(GImNodes->OriginalImgCtx->IO.BackendLanguageUserData);
         memcpy(
             (void*)&GImNodes->NodeEditorImgCtx->IO,
             (void*)&GImNodes->OriginalImgCtx->IO,
-            offsetof(ImGuiIO, SetPlatformImeDataFn) +
-                sizeof(GImNodes->OriginalImgCtx->IO.SetPlatformImeDataFn));
+            io_copy_size);
 
         GImNodes->NodeEditorImgCtx->IO.BackendPlatformUserData = nullptr;
         GImNodes->NodeEditorImgCtx->IO.BackendRendererUserData = nullptr;
         GImNodes->NodeEditorImgCtx->IO.IniFilename = nullptr;
         GImNodes->NodeEditorImgCtx->IO.ConfigInputTrickleEventQueue = false;
+        // Disable multi-viewport for the internal node-editor context.
+        GImNodes->NodeEditorImgCtx->IO.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
         GImNodes->NodeEditorImgCtx->IO.DisplaySize = ImMax(canvas_size / editor.ZoomScale, ImVec2(0, 0));
         GImNodes->NodeEditorImgCtx->Style = GImNodes->OriginalImgCtx->Style;
 
@@ -2575,6 +2629,24 @@ void MiniMap(
     // mini map is draw over everything and all pin/link positions are updated
     // correctly relative to their respective nodes. Hence, we must store some of
     // of the state for the mini map in GImNodes for the actual drawing/updating
+}
+
+bool GetMiniMapRect(ImVec2* out_min, ImVec2* out_max)
+{
+    if (out_min == NULL || out_max == NULL)
+    {
+        return false;
+    }
+
+    if (!IsMiniMapActive())
+    {
+        return false;
+    }
+
+    ImNodesEditorContext& editor = EditorContextGet();
+    *out_min = editor.MiniMapRectScreenSpace.Min;
+    *out_max = editor.MiniMapRectScreenSpace.Max;
+    return true;
 }
 
 void BeginNode(const int node_id)

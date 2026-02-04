@@ -78,7 +78,8 @@ enum ImNodesStyleFlags_
     ImNodesStyleFlags_NodeOutline = 1 << 0,
     ImNodesStyleFlags_GridLines = 1 << 2,
     ImNodesStyleFlags_GridLinesPrimary = 1 << 3,
-    ImNodesStyleFlags_GridSnapping = 1 << 4
+    ImNodesStyleFlags_GridSnapping = 1 << 4,
+    ImNodesStyleFlags_GridAxes = 1 << 5
 };
 
 enum ImNodesPinShape_
@@ -281,6 +282,10 @@ void MiniMap(
     const ImNodesMiniMapLocation                     location = ImNodesMiniMapLocation_TopLeft,
     const ImNodesMiniMapNodeHoveringCallback         node_hovering_callback = NULL,
     const ImNodesMiniMapNodeHoveringCallbackUserData node_hovering_callback_data = NULL);
+
+// Query the screen-space rectangle for the current minimap. Returns false if the minimap
+// is not active or if output pointers are null.
+bool GetMiniMapRect(ImVec2* out_min, ImVec2* out_max);
 
 // Editor zoom controls
 float EditorContextGetZoom();
